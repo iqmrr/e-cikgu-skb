@@ -120,7 +120,8 @@ function listen() {
       const name = ch.doc.id;
       const lh = name in local ? hash(JSON.stringify(local[name])) : undefined;
       if (ch.type === 'removed') {
-        if (name.startsWith('att-') && (lh === undefined || lh === base[name])) { apply(S, name, {}); delete base[name]; changed = true; }
+        if (name.startsWith('att-') && (lh === undefined || lh === base[name])) { apply(S, name, {}); changed = true; }
+        delete base[name]; // jika dipadam dari console, data peranti ini akan dinaikkan semula
         continue;
       }
       const { json } = ch.doc.data();
