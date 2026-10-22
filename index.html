@@ -12,7 +12,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="css/style.css?v=2">
+  <link rel="stylesheet" href="css/style.css?v=3">
 </head>
 <body>
   <div id="app">
@@ -25,7 +25,9 @@
   <input type="file" id="restore-file" accept=".json,application/json" hidden>
 
   <!-- Naikkan ?v= setiap kali kemas kini supaya browser ambil fail baru -->
-  <script src="js/db.js?v=2"></script>
-  <script src="js/app.js?v=2"></script>
+  <script src="js/db.js?v=3"></script>
+  <script src="js/app.js?v=3"></script>
+  <!-- Sync cloud (Firebase). Jika gagal dimuat (offline), sistem tetap berfungsi dalam peranti -->
+  <script type="module" src="js/cloud.js?v=3"></script>
 </body>
 </html>

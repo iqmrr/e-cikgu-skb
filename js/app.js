@@ -332,9 +332,11 @@ let saveTimer = null;
 function persist() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => { saveTimer = null; DB.put('state', 'main', S).catch(() => toast(L('Gagal menyimpan data!', 'Failed to save data!'), 'err')); }, 200);
+  window.Cloud?.push();
 }
 async function persistNow() {
   clearTimeout(saveTimer); saveTimer = null;
+  window.Cloud?.push();
   try { await DB.put('state', 'main', S); return true; }
   catch { toast(L('Gagal menyimpan data! Ruang storan mungkin penuh.', 'Failed to save! Storage may be full.'), 'err'); return false; }
 }
@@ -342,9 +344,18 @@ async function persistNow() {
 const photoCache = new Map();
 async function getPhoto(id) {
   if (photoCache.has(id)) return photoCache.get(id);
-  const v = await DB.get('photos', id);
+  const v = (await DB.get('photos', id)) || (await window.Cloud?.getPhoto(id)); // ambil dari cloud jika tiada dalam peranti
   if (v) photoCache.set(id, v);
   return v;
+}
+// Hantar perubahan gambar ke cloud; jika belum login, simpan dalam giliran
+function cloudPhoto(op, id) {
+  if (window.Cloud?.user) { (op === 'put' ? Cloud.putPhoto(id) : Cloud.delPhoto(id)).catch(() => {}); return; }
+  try {
+    const q = JSON.parse(localStorage.getItem('ecikgu-photo-queue') || '[]');
+    q.push({ op, id });
+    localStorage.setItem('ecikgu-photo-queue', JSON.stringify(q));
+  } catch { /* storan penuh */ }
 }
 async function hydratePhotos(root) {
   for (const img of $$('img[data-photo]', root)) {
@@ -360,14 +371,21 @@ function compressImage(file, max = 1600, q = .82) {
     const img = new Image();
     const url = URL.createObjectURL(file);
     img.onload = () => {
-      const k = Math.min(1, max / Math.max(img.width, img.height));
-      const c = document.createElement('canvas');
-      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
-      const x = c.getContext('2d');
-      x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
-      x.drawImage(img, 0, 0, c.width, c.height);
+      // Kecilkan sehingga < ~700 KB supaya muat dalam satu dokumen cloud
+      let out = '';
+      for (let tries = 0; tries < 6; tries++) {
+        const k = Math.min(1, max / Math.max(img.width, img.height));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+        const x = c.getContext('2d');
+        x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+        x.drawImage(img, 0, 0, c.width, c.height);
+        out = c.toDataURL('image/jpeg', q);
+        if (out.length < 700000) break;
+        max *= .8; q = Math.max(.5, q - .07);
+      }
       URL.revokeObjectURL(url);
-      resolve(c.toDataURL('image/jpeg', q));
+      resolve(out);
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('bad image')); };
     img.src = url;
@@ -419,11 +437,31 @@ function topbar() {
   const en = lg() === 'en';
   return `<div class="topbar"><div class="topbar-in">
     <div class="lang-switch"><button class="${en ? '' : 'on'}" data-act="setLang" data-v="ms">BM · Bahasa Melayu</button><button class="${en ? 'on' : ''}" data-act="setLang" data-v="en">EN · English</button></div>
-    <span class="tb-sep"></span><span class="tb-item">👩🏻‍🏫 ${L('Guru', 'Teacher')}</span><span class="tb-sep"></span>
+    <span class="tb-sep"></span>${cloudBadge()}<span class="tb-sep"></span>
     <button class="tb-btn" data-act="backup">⬇️ ${L('Salinan', 'Backup')}</button>
     <button class="tb-btn" data-act="restore">⬆️ ${L('Pulih', 'Restore')}</button>
     <button class="tb-btn" data-act="settings">⚙️ ${L('Tetapan', 'Settings')}</button>
   </div></div>`;
+}
+const cloudLabel = st => ({
+  synced: ['✅', L('Disegerakkan', 'Synced')], syncing: ['🔄', L('Menyegerak…', 'Syncing…')],
+  offline: ['📴', L('Offline — sync nanti', 'Offline — will sync')], error: ['⚠️', L('Sync bermasalah', 'Sync problem')],
+}[st] || ['☁️', L('Cloud', 'Cloud')]);
+function cloudBadge() {
+  const C = window.Cloud;
+  if (!C) return `<span class="tb-item">👩🏻‍🏫 ${L('Guru', 'Teacher')}</span>`;
+  if (!C.user) return `<button class="tb-btn tb-cloud" data-act="cloudLogin">☁️ ${L('Login Google (Sync)', 'Google Sign-in (Sync)')}</button>`;
+  const [i, t] = cloudLabel(C.status);
+  return `<button class="tb-btn tb-cloud st-${C.status}" data-act="settings" title="${esc(C.user.email)}">${i} ${t}</button>`;
+}
+function cloudBanner() {
+  const C = window.Cloud;
+  let hidden = false;
+  try { hidden = localStorage.getItem('ecikgu-hide-cloud') === '1'; } catch { /* abaikan */ }
+  if (!C || C.user || hidden) return '';
+  return `<div class="alert alert-purple"><span class="al-icon">☁️</span><div><b>${L('Sync data antara phone & laptop', 'Sync data between phone & laptop')}</b>
+    <small>${L('Login dengan akaun Google — data akan disegerakkan secara automatik dan selamat dalam cloud.', 'Sign in with Google — data syncs automatically and stays safe in the cloud.')}</small></div>
+    <button class="btn btn-sm btn-primary" data-act="cloudLogin">${L('Login Google', 'Sign in')}</button><button class="btn btn-sm btn-ghost btn-icon" data-act="hideCloud" title="${L('Tutup', 'Dismiss')}">✕</button></div>`;
 }
 function appbar() {
   const st = S.settings, n = reminders().length;
@@ -447,7 +485,7 @@ function navbar() {
   return `<nav class="nav"><div class="nav-in">${NAV.map(([k, i, ms, en]) =>
     `<a href="#${k}" class="nav-item ${UI.view === k ? 'active' : ''}"><span>${i}</span>${L(ms, en)}${k === 'meetings' && up ? `<em>${up}</em>` : ''}</a>`).join('')}</div></nav>`;
 }
-const footer = () => `<footer class="footer">© ${new Date().getFullYear()} e-Cikgu ${esc(S.settings.schoolShort)} • ${L('Dibina khas untuk', 'Built for')} <b>Cikgu ${esc(S.settings.teacherName)}</b> 💜 • ${L('Semua data disimpan dalam peranti ini', 'All data is stored on this device')}${DB.isFallback ? ' (localStorage)' : ''}</footer>`;
+const footer = () => `<footer class="footer">© ${new Date().getFullYear()} e-Cikgu ${esc(S.settings.schoolShort)} • ${L('Dibina khas untuk', 'Built for')} <b>Cikgu ${esc(S.settings.teacherName)}</b> 💜 • ${window.Cloud?.user ? `☁️ ${L('Data disegerakkan ke cloud', 'Data synced to the cloud')} (${esc(window.Cloud.user.email)})` : L('Semua data disimpan dalam peranti ini', 'All data is stored on this device') + (DB.isFallback ? ' (localStorage)' : '')}</footer>`;
 
 function render() {
   const ae = document.activeElement;
@@ -573,7 +611,8 @@ VIEWS.dashboard = () => {
   </section>
 
   ${soon.map(m => `<div class="alert alert-purple"><span class="al-icon">${mcat(m.category).icon}</span><div><b>${relDay(m.date)}: ${esc(m.title)}</b><small>${fmtDate(m.date, true)} • ${fmtTime(m.time)}${m.place ? ' • 📍 ' + esc(m.place) : ''}</small></div><button class="btn btn-sm btn-white" data-act="viewMeeting" data-id="${m.id}">${L('Lihat', 'View')}</button></div>`).join('')}
-  ${backupReminder()}
+  ${cloudBanner()}
+  ${window.Cloud?.user ? '' : backupReminder()}
 
   <div class="stat-row">
     <div class="stat"><div class="stat-icon" style="background:#f3e8ff">👧</div><div><b>${S.students.length}</b><small>${L('Murid Berdaftar', 'Students')}</small></div></div>
@@ -1318,6 +1357,7 @@ function settingsModal() {
       ${field(L('Moto', 'Motto'), inp('motto', d.motto))}
       ${field(L('Alamat', 'Address'), inp('address', d.address))}
     </div>
+    <div class="form-section"><h4>☁️ ${L('Akaun & Sync Cloud', 'Account & Cloud Sync')}</h4>${cloudAccount()}</div>
     <div class="form-section"><h4>💾 ${L('Data & Salinan', 'Data & Backup')}</h4>
       <p class="hint" style="margin:0 0 10px">${L('Salinan terakhir', 'Last backup')}: <b>${lb ? fmtDate(lb.slice(0, 10)) : L('Belum pernah', 'Never')}</b> • <span id="storage-info">${L('Mengira ruang storan…', 'Checking storage…')}</span></p>
       <div class="page-actions">
@@ -1328,6 +1368,17 @@ function settingsModal() {
       </div></div>`,
     footer: `<button class="btn btn-ghost" data-act="closeModal">${L('Batal', 'Cancel')}</button><button class="btn btn-primary" data-act="saveSettings">💾 ${L('Simpan Tetapan', 'Save Settings')}</button>`,
   };
+}
+
+function cloudAccount() {
+  const C = window.Cloud;
+  if (!C) return `<p class="hint" style="margin:0">${L('Sync cloud tidak tersedia sekarang — perlu internet dan buka sistem melalui link (bukan fail).', 'Cloud sync unavailable — needs internet and opening the system via its link (not the file).')}</p>`;
+  if (!C.user) return `<p class="hint" style="margin:0 0 10px">${L('Login dengan akaun Google untuk sync data antara phone & laptop secara automatik. Gunakan akaun yang SAMA pada setiap peranti.', 'Sign in with Google to sync between phone & laptop automatically. Use the SAME account on every device.')}</p>
+    <button class="btn btn-primary btn-sm" data-act="cloudLogin">☁️ ${L('Login dengan Google', 'Sign in with Google')}</button>`;
+  const [i, t] = cloudLabel(C.status);
+  return `<div class="list-row">${C.user.photoURL ? `<img src="${esc(C.user.photoURL)}" alt="" referrerpolicy="no-referrer" style="width:42px;height:42px;border-radius:12px">` : '<div class="av">👤</div>'}
+    <div class="lr-main"><b>${esc(C.user.displayName || C.user.email)}</b><small>${esc(C.user.email)} • ${i} ${t}</small></div>
+    <button class="btn btn-sm btn-danger-ghost" data-act="cloudLogout">${L('Log Keluar', 'Sign Out')}</button></div>`;
 }
 
 /* =========================================================
@@ -1545,10 +1596,10 @@ A.saveMeeting = async () => {
   const d = UI.draft;
   if (!d.date || !d.time || !d.title.trim()) return toast(L('Sila isi Tarikh, Masa dan Tajuk.', 'Please fill in Date, Time and Title.'), 'err');
   try {
-    for (const p of d.photos.filter(p => p.isNew)) { await DB.put('photos', p.id, p.src); photoCache.set(p.id, p.src); }
+    for (const p of d.photos.filter(p => p.isNew)) { await DB.put('photos', p.id, p.src); photoCache.set(p.id, p.src); cloudPhoto('put', p.id); }
     const old = d.id && S.meetings.find(m => m.id === d.id);
     const keep = d.photos.map(p => p.id);
-    if (old) for (const pid of old.photos) if (!keep.includes(pid)) { await DB.del('photos', pid); photoCache.delete(pid); }
+    if (old) for (const pid of old.photos) if (!keep.includes(pid)) { await DB.del('photos', pid); photoCache.delete(pid); cloudPhoto('del', pid); }
     const rec = { id: d.id || uid(), date: d.date, time: d.time, end: d.end, title: d.title.trim(), category: d.category, place: d.place.trim(), hours: d.hours, notes: d.notes, photos: keep };
     if (old) Object.assign(old, rec); else S.meetings.push(rec);
     if (!(await persistNow())) return;
@@ -1562,7 +1613,7 @@ A.saveMeeting = async () => {
 A.delMeeting = async el => {
   const m = S.meetings.find(x => x.id === el.dataset.id);
   if (!await ask(L(`Padam rekod "${esc(m.title)}" beserta ${m.photos.length} gambar?`, `Delete "${esc(m.title)}" and its ${m.photos.length} photos?`), { danger: true, ok: L('Padam', 'Delete') })) return;
-  for (const p of m.photos) { await DB.del('photos', p); photoCache.delete(p); }
+  for (const p of m.photos) { await DB.del('photos', p); photoCache.delete(p); cloudPhoto('del', p); }
   S.meetings = S.meetings.filter(x => x.id !== m.id);
   await persistNow(); closeModal(); render(); toast(L('Rekod dipadam', 'Record deleted'), 'info');
 };
@@ -1596,7 +1647,8 @@ A.saveSettings = async () => {
 A.backup = async () => {
   try {
     const photos = {};
-    for (const k of await DB.keys('photos')) photos[k] = await DB.get('photos', k);
+    const ids = new Set([...(await DB.keys('photos')), ...S.meetings.flatMap(m => m.photos)]);
+    for (const k of ids) { const v = await getPhoto(k); if (v) photos[k] = v; } // termasuk gambar yang hanya ada dalam cloud
     S.settings.lastBackup = new Date().toISOString();
     const data = { app: APP_ID, version: 1, exportedAt: S.settings.lastBackup, state: S, photos };
     download(`salinan-ecikgu-${safeName(S.settings.schoolShort)}-${todayISO()}.json`, new Blob([JSON.stringify(data)], { type: 'application/json' }));
@@ -1607,6 +1659,24 @@ A.backup = async () => {
     toast(L('Gagal membuat salinan.', 'Backup failed.'), 'err');
   }
 };
+// Padam semua gambar dalam peranti (dan cloud jika login)
+async function clearPhotos() {
+  const ids = new Set([...(await DB.keys('photos')), ...S.meetings.flatMap(m => m.photos)]);
+  ids.forEach(id => cloudPhoto('del', id));
+  await DB.clear('photos');
+  photoCache.clear();
+}
+A.cloudLogin = () => {
+  if (!window.Cloud) return toast(L('Sync cloud perlukan internet. Cuba lagi bila ada internet.', 'Cloud sync needs internet. Try again when online.'), 'err');
+  Cloud.signIn();
+};
+A.cloudLogout = async () => {
+  if (!await ask(L('Log keluar? Data kekal dalam peranti ini, tetapi tidak akan disegerakkan sehingga anda login semula.', 'Sign out? Data stays on this device but will not sync until you sign in again.'), { ok: L('Log Keluar', 'Sign Out') })) return;
+  await Cloud.signOut();
+  closeModal(); render();
+  toast(L('Anda telah log keluar', 'Signed out'), 'info');
+};
+A.hideCloud = () => { try { localStorage.setItem('ecikgu-hide-cloud', '1'); } catch { /* abaikan */ } render(); };
 A.restore = () => { const f = $('#restore-file'); f.value = ''; f.click(); };
 async function restoreFrom(file) {
   let data;
@@ -1614,9 +1684,8 @@ async function restoreFrom(file) {
   if (!data || data.app !== APP_ID || !data.state) return toast(L('Ini bukan fail salinan e-Cikgu.', 'This is not an e-Cikgu backup file.'), 'err');
   const when = data.exportedAt ? fmtDate(data.exportedAt.slice(0, 10)) : '?';
   if (!await ask(L(`Pulihkan data dari salinan bertarikh ${when}? Data semasa akan DIGANTIKAN.`, `Restore data from the backup dated ${when}? Current data will be REPLACED.`), { danger: true, ok: L('Pulihkan', 'Restore') })) return;
-  await DB.clear('photos');
-  photoCache.clear();
-  for (const [k, v] of Object.entries(data.photos || {})) await DB.put('photos', k, v);
+  await clearPhotos();
+  for (const [k, v] of Object.entries(data.photos || {})) { await DB.put('photos', k, v); cloudPhoto('put', k); }
   S = normalize(data.state);
   UI.attDraft = null;
   await persistNow(); closeModal(); render();
@@ -1625,16 +1694,17 @@ async function restoreFrom(file) {
 A.loadSample = async () => {
   if (!await ask(L('Gantikan semua data semasa dengan data contoh?', 'Replace all current data with sample data?'), { danger: true, ok: L('Ya, gantikan', 'Yes, replace') })) return;
   const keep = { ...S.settings };
-  await DB.clear('photos'); photoCache.clear();
+  await clearPhotos();
   S = await seedState();
   Object.assign(S.settings, keep);
+  S.meetings.forEach(m => m.photos.forEach(id => cloudPhoto('put', id)));
   UI.attDraft = null;
   await persistNow(); closeModal(); render(); toast(L('Data contoh dimuatkan', 'Sample data loaded'), 'info');
 };
 A.eraseAll = async () => {
   if (!await ask(L('Padam SEMUA kelas, murid, kehadiran, kerja rumah, markah dan rekod mesyuarat? Tindakan ini tidak boleh dibatalkan. Pastikan anda sudah buat salinan.', 'Erase ALL data? This cannot be undone. Make sure you have a backup.'), { danger: true, ok: L('Padam Semua', 'Erase All') })) return;
   const keep = { ...S.settings };
-  await DB.clear('photos'); photoCache.clear();
+  await clearPhotos();
   S = emptyState();
   Object.assign(S.settings, keep);
   UI.attDraft = null;
@@ -1738,6 +1808,44 @@ window.addEventListener('beforeunload', e => {
 });
 
 /* =========================================================
+   Jambatan untuk js/cloud.js
+   ========================================================= */
+let appReadyResolve;
+window.AppReady = new Promise(r => { appReadyResolve = r; });
+window.App = {
+  L, ask, toast,
+  state: () => S,
+  blankState() {
+    const s = emptyState();
+    s.settings.lang = S.settings.lang;
+    s.settings.lastBackup = S.settings.lastBackup;
+    return s;
+  },
+  async replaceState(ns) {
+    S = normalize(ns);
+    UI.attDraft = null;
+    await DB.put('state', 'main', S);
+    closeModal(); render();
+  },
+  remoteApplied() {
+    DB.put('state', 'main', S).catch(() => {});
+    if (!UI.attDraft?.dirty) UI.attDraft = null;
+    render();
+    if ([studentProfileModal, meetingDetailModal].includes(UI.modal?.fn)) drawModal(); // modal paparan sahaja
+  },
+  photoIds: () => DB.keys('photos'),
+  getLocalPhoto: id => DB.get('photos', id),
+  putLocalPhoto: (id, v) => { photoCache.set(id, v); return DB.put('photos', id, v); },
+  cloudStatus() {
+    if (!S) return;
+    const t = $('.topbar'); if (t) t.outerHTML = topbar();
+    const f = $('.footer'); if (f) f.outerHTML = footer();
+    if (UI.modal?.fn === settingsModal) drawModal();
+  },
+  cloudReady() { if (S) render(); },
+};
+
+/* =========================================================
    Mula
    ========================================================= */
 (async function init() {
@@ -1749,5 +1857,6 @@ window.addEventListener('beforeunload', e => {
   const v = location.hash.slice(1);
   if (VIEWS[v]) UI.view = v;
   render();
+  appReadyResolve();
   if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 })();

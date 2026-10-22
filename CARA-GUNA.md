@@ -26,6 +26,14 @@ Sistem pengurusan guru untuk **Cikgu Azah Athirah**, Sekolah Kebangsaan Bangsar.
 | 🤝 Mesyuarat & Kursus | Tarikh, Masa, Tajuk, Catatan, **Bukti Gambar**. Boleh edit dan padam |
 | 📊 Laporan | Cetak atau simpan PDF, eksport CSV (boleh dibuka dalam Excel) |
 
+## ☁️ Sync antara phone & laptop
+1. Buka link **https://iqmrr.github.io/e-cikgu-skb/** dan tekan **☁️ Login Google (Sync)** di bar atas.
+2. **Device pertama** (contohnya laptop yang dah ada data): pilih **Ya, naikkan**. Semua data dan gambar akan dinaikkan ke cloud.
+3. **Device kedua** (contohnya phone): login dengan **akaun Google yang sama**, kemudian pilih **Guna data cloud**.
+4. Selepas tu, apa-apa perubahan akan disegerakkan secara automatik. Status sync ditunjukkan di bar atas (✅ Disegerakkan / 🔄 / 📴 Offline).
+- Tanpa internet pun boleh guna. Perubahan akan dihantar bila internet kembali.
+- Sync hanya berfungsi bila dibuka melalui link, bukan dengan double-click fail `index.html`.
+
 ## Import murid dari Excel
 Murid → **📥 Import dari Excel** → pilih kelas. Lepas tu, sama ada:
 - **Copy** lajur dalam Excel (Nama | Nama Ibu Bapa | No Telefon), kemudian **paste** dalam kotak, atau
