@@ -1,0 +1,11 @@
+{
+  "name": "e-Cikgu SKB — Sistem Pengurusan Guru",
+  "short_name": "e-Cikgu SKB",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#f6f2fd",
+  "theme_color": "#6b21a8",
+  "icons": [
+    { "src": "assets/logo.png", "sizes": "any", "type": "image/png", "purpose": "any" }
+  ]
+}
