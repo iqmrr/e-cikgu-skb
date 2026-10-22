@@ -19,6 +19,7 @@ Sistem pengurusan guru untuk **Cikgu Azah Athirah**, Sekolah Kebangsaan Bangsar.
 | 📚 Kerja Rumah | Telah atau Belum Dihantar, tahap pencapaian dan ulasan guru |
 | 📝 Peperiksaan | Masukkan markah, gred A–E dikira automatik |
 | 🗓️ Jadual | Jadual waktu mengajar Isnin–Jumaat |
+| 🔄 Relief | Tarikh, hari (auto), kelas, masa mula/tamat, tempoh dikira automatik, jumlah sebulan/setahun |
 | 👧 Murid | Profil murid, telefon ibu bapa, **Import dari Excel** |
 | 🏫 Kelas | Tambah, ubah atau padam kelas dan subjek |
 | 🏆 Anugerah | Mata merit dan carta kedudukan |

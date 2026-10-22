@@ -159,7 +159,16 @@ function examStats(e) {
 }
 const sortMeet = (a, b) => (a.date + a.time).localeCompare(b.date + b.time);
 const upcomingMeetings = () => S.meetings.filter(m => daysUntil(m.date) >= 0).sort(sortMeet);
-const awardPoints = sid => S.awards.filter(a => a.sid === sid).reduce((t, a) => t + Number(a.pts || 0), 0);
+const toMin = t => { const [h, m] = (t || '0:0').split(':').map(Number); return h * 60 + m; };
+const minToTime = m => `${pad(Math.floor(m / 60) % 24)}:${pad(m % 60)}`;
+const reliefMins = r => Math.max(0, toMin(r.end) - toMin(r.start));
+const sortRelief = (a, b) => (a.date + a.start).localeCompare(b.date + b.start);
+function fmtDur(mins) {
+  if (!mins) return '—';
+  const h = Math.floor(mins / 60), m = mins % 60;
+  return [h ? `${h} ${L('jam', 'hr')}` : '', m ? `${m} ${L('minit', 'min')}` : ''].filter(Boolean).join(' ');
+}
+const awardPoints = sid =>S.awards.filter(a => a.sid === sid).reduce((t, a) => t + Number(a.pts || 0), 0);
 
 function nextStudentId() {
   const prefix = `${S.settings.schoolShort}-${new Date().getFullYear()}-`;
@@ -194,7 +203,7 @@ function emptyState() {
       schoolName: 'Sekolah Kebangsaan Bangsar', schoolShort: 'SKB', motto: 'Ilmu Bintang Hidup',
       address: 'Bangsar, 59100 Kuala Lumpur', schoolCode: '', lastBackup: null,
     },
-    classes: [], students: [], attendance: {}, homework: [], exams: [], timetable: [], awards: [], meetings: [],
+    classes: [], students: [], attendance: {}, homework: [], exams: [], timetable: [], awards: [], meetings: [], reliefs: [],
   };
 }
 function normalize(s) {
@@ -308,6 +317,13 @@ async function seedState() {
     { id: uid(), date: addDays(T, -6), time: '08:00', end: '17:00', title: `Kursus Pentaksiran Bilik Darjah (PBD) ${yr}`, category: 'kursus', place: 'PPD Bangsar Pudu', hours: '8', notes: '• Cara menentukan Tahap Penguasaan (TP) 1–6\n• Contoh eviden PBD untuk setiap TP\n• Kemas kini dalam sistem sebelum hujung bulan', photos: [ph1, ph2] },
     { id: uid(), date: addDays(T, -15), time: '14:00', end: '16:00', title: 'Mesyuarat Guru Kali 4', category: 'mesyuarat', place: 'Dewan SKB', hours: '', notes: 'Persediaan Hari Anugerah dan jadual peperiksaan akhir tahun.', photos: [] },
   ];
+
+  const schoolDay = d => { while ([0, 6].includes(parseISO(d).getDay())) d = addDays(d, -1); return d; };
+  s.reliefs = [
+    { id: uid(), date: schoolDay(addDays(T, -1)), kelas: '3 Arif', start: '09:00', end: '10:00', subject: 'Matematik', replacing: 'Cikgu Rosmah (Kursus)', notes: 'Murid buat latihan buku aktiviti m/s 30.' },
+    { id: uid(), date: schoolDay(addDays(T, -5)), kelas: '2 Bestari', start: '11:30', end: '12:00', subject: 'Pendidikan Moral', replacing: 'Cikgu Lee (Cuti Sakit)', notes: '' },
+    { id: uid(), date: schoolDay(addDays(T, -9)), kelas: '6 Dinamik', start: '07:45', end: '08:45', subject: 'Sains', replacing: 'Cikgu Ahmad (Mesyuarat)', notes: '' },
+  ];
   return s;
 }
 
@@ -364,6 +380,7 @@ const UI = {
   attClass: null, attDate: todayISO(), attMode: 'daily', attMonth: todayISO().slice(0, 7), attDraft: null,
   hwClass: 'all', exClass: 'all', stuClass: 'all', stuSearch: '', awClass: 'all',
   meetFilter: 'upcoming', meetCat: 'all', meetSearch: '',
+  relMonth: todayISO().slice(0, 7), rRelMonth: '',
   rTab: 'attendance', rClass: null, rMonth: '', rStudent: null, rExam: null, rYear: String(new Date().getFullYear()), rCat: 'all', rPhotos: false,
 };
 
@@ -390,6 +407,7 @@ const NAV = [
   ['homework', '📚', 'Kerja Rumah', 'Homework'],
   ['exams', '📝', 'Peperiksaan', 'Exams'],
   ['timetable', '🗓️', 'Jadual', 'Timetable'],
+  ['relief', '🔄', 'Relief', 'Relief'],
   ['students', '👧', 'Murid', 'Students'],
   ['classes', '🏫', 'Kelas', 'Classes'],
   ['awards', '🏆', 'Anugerah', 'Awards'],
@@ -537,6 +555,7 @@ VIEWS.dashboard = () => {
   const pendingHw = S.homework.filter(h => { const x = hwStats(h); return x.done < x.total; }).length;
   const wd = new Date().getDay();
   const todaySlots = S.timetable.filter(t => t.day === wd).sort((a, b) => a.start.localeCompare(b.start));
+  const todayRel = S.reliefs.filter(r => r.date === todayISO()).sort(sortRelief);
   const att = attentionList();
   const nowHM = `${pad(new Date().getHours())}:${pad(new Date().getMinutes())}`;
   const qc = (n, icon, color, title, desc, link, href, badge) =>
@@ -577,7 +596,9 @@ VIEWS.dashboard = () => {
     <div class="card">
       <div class="card-title"><h3>🗓️ ${L('Kelas Hari Ini', "Today's Classes")} <span class="pill pill-purple">${DAYS[lg()][wd]}</span></h3><a href="#timetable">${L('Jadual penuh', 'Full timetable')} →</a></div>
       ${todaySlots.length ? todaySlots.map(t => { const c = cls(t.classId); const now = t.start <= nowHM && nowHM < t.end; return `<div class="list-row"><div class="time-badge">${fmtTime(t.start)}</div><div class="lr-main"><b>${esc(c?.name || '—')} · ${esc(t.subject)}</b><small>${fmtTime(t.start)} – ${fmtTime(t.end)}${t.room ? ' • ' + esc(t.room) : ''}</small></div>${now ? pill('● ' + L('Sedang berlangsung', 'Now'), 'green') : ''}</div>`; }).join('')
-      : `<div class="empty-sm">☕ ${L('Tiada kelas dijadualkan hari ini.', 'No classes scheduled today.')}</div>`}
+      : todayRel.length ? '' : `<div class="empty-sm">☕ ${L('Tiada kelas dijadualkan hari ini.', 'No classes scheduled today.')}</div>`}
+      ${todayRel.map(r => `<div class="list-row" style="cursor:pointer" data-act="editRelief" data-id="${r.id}"><div class="time-badge" style="background:var(--amber-bg);color:var(--amber)">${fmtTime(r.start)}</div><div class="lr-main"><b>${esc(r.kelas)}${r.subject ? ' · ' + esc(r.subject) : ''}</b><small>${fmtTime(r.start)} – ${fmtTime(r.end)} • ${fmtDur(reliefMins(r))}${r.replacing ? ' • ' + esc(r.replacing) : ''}</small></div>${pill('🔄 Relief', 'amber')}</div>`).join('')}
+      <div style="margin-top:10px"><button class="btn btn-sm btn-soft" data-act="addRelief">🔄 ${L('Rekod Relief', 'Log a Relief')}</button></div>
     </div>
     <div class="card">
       <div class="card-title"><h3>🤝 ${L('Mesyuarat & Kursus Akan Datang', 'Upcoming Meetings & Courses')}</h3><a href="#meetings">${L('Lihat semua', 'View all')} →</a></div>
@@ -812,6 +833,68 @@ function slotFormModal() {
     </div>`,
     footer: `${d.id ? `<button class="btn btn-danger-ghost left" data-act="delSlot" data-id="${d.id}">🗑️ ${L('Padam', 'Delete')}</button>` : ''}<button class="btn btn-ghost" data-act="closeModal">${L('Batal', 'Cancel')}</button><button class="btn btn-primary" data-act="saveSlot">💾 ${L('Simpan', 'Save')}</button>`,
   };
+}
+
+/* ---------- Relief ---------- */
+VIEWS.relief = () => {
+  const add = `<button class="btn btn-primary" data-act="addRelief">＋ ${L('Tambah Relief', 'Add Relief')}</button>`;
+  const yr = String(new Date().getFullYear()), mo = todayISO().slice(0, 7), ym = UI.relMonth;
+  const sum = list => ({ n: list.length, m: list.reduce((t, r) => t + reliefMins(r), 0) });
+  const sM = sum(S.reliefs.filter(r => r.date.startsWith(mo))), sY = sum(S.reliefs.filter(r => r.date.startsWith(yr)));
+  const list = S.reliefs.filter(r => !ym || r.date.startsWith(ym)).sort(sortRelief).reverse();
+  const total = sum(list);
+  return pageHead(L('Senarai Relief', 'Relief Log'), L('Rekod setiap kelas relief — tarikh, hari, kelas, masa dan tempoh dikira automatik.', 'Log every relief class — date, day, class, time and duration calculated automatically.'), add)
+  + `<div class="meet-stats">
+      <div class="stat"><div class="stat-icon" style="background:#fef3c7">🔄</div><div><b>${sM.n}</b><small>${L('Relief Bulan Ini', 'Reliefs This Month')}</small></div></div>
+      <div class="stat"><div class="stat-icon" style="background:#f3e8ff">⏱️</div><div><b class="sm">${fmtDur(sM.m)}</b><small>${L('Masa Bulan Ini', 'Time This Month')}</small></div></div>
+      <div class="stat"><div class="stat-icon" style="background:#dbeafe">📆</div><div><b>${sY.n}</b><small>${L(`Relief Tahun ${yr}`, `Reliefs in ${yr}`)}</small></div></div>
+      <div class="stat"><div class="stat-icon" style="background:#dcfce7">🕒</div><div><b class="sm">${fmtDur(sY.m)}</b><small>${L('Masa Tahun Ini', 'Time This Year')}</small></div></div>
+    </div>
+    <div class="toolbar">${field(L('Bulan', 'Month'), `<input type="month" class="input" data-ui="relMonth" value="${ym}">`)}
+      <button class="btn btn-sm ${ym ? 'btn-ghost' : 'btn-soft'}" style="align-self:flex-end;margin-bottom:4px" data-act="setUI" data-k="relMonth" data-v="">${L('Tunjuk Semua', 'Show All')}</button></div>`
+  + (list.length ? `<div class="rl-cards">${list.map(r => { const d = parseISO(r.date); return `<div class="rl-card">
+      <div class="mini-date" style="background:linear-gradient(160deg,#fbbf24,#d97706)"><b>${d.getDate()}</b><small>${MON_S[lg()][d.getMonth()]}</small></div>
+      <div class="lr-main"><b>${esc(r.kelas)}${r.subject ? ` · <span class="muted">${esc(r.subject)}</span>` : ''}</b>
+        <small>${DAYS[lg()][d.getDay()]} • ${fmtTime(r.start)} – ${fmtTime(r.end)}</small>
+        <div class="m-tags" style="margin-top:6px">${pill('⏱️ ' + fmtDur(reliefMins(r)), 'amber')}${r.replacing ? pill('👤 ' + esc(r.replacing), 'gray') : ''}</div>
+        ${r.notes ? `<small style="display:block;margin-top:4px">${esc(r.notes)}</small>` : ''}</div>
+      <div class="rl-act"><button class="btn btn-sm btn-ghost btn-icon" data-act="editRelief" data-id="${r.id}">✏️</button><button class="btn btn-sm btn-danger-ghost btn-icon" data-act="delRelief" data-id="${r.id}">🗑️</button></div></div>`; }).join('')}
+      <p class="hint">${L('Jumlah', 'Total')}: <b>${total.n} ${L('relief', 'reliefs')}</b> • <b>${fmtDur(total.m)}</b></p></div>
+    <div class="card rl-table" style="padding:12px"><div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>${L('Tarikh', 'Date')}</th><th>${L('Hari', 'Day')}</th><th>${L('Kelas', 'Class')}</th><th>${L('Masa', 'Time')}</th><th>${L('Tempoh', 'Duration')}</th><th>${L('Ganti Guru', 'Covering For')}</th><th></th></tr></thead>
+      <tbody>${list.map((r, i) => `<tr><td>${i + 1}</td><td style="white-space:nowrap"><b>${fmtDate(r.date)}</b></td><td>${DAYS[lg()][parseISO(r.date).getDay()]}</td>
+        <td><b>${esc(r.kelas)}</b>${r.subject ? `<br><small class="muted">${esc(r.subject)}</small>` : ''}</td>
+        <td style="white-space:nowrap">${fmtTime(r.start)} – ${fmtTime(r.end)}</td><td>${pill('⏱️ ' + fmtDur(reliefMins(r)), 'amber')}</td>
+        <td>${esc(r.replacing || '—')}${r.notes ? `<br><small class="muted">${esc(r.notes)}</small>` : ''}</td>
+        <td style="white-space:nowrap"><button class="btn btn-sm btn-ghost btn-icon" data-act="editRelief" data-id="${r.id}" title="Edit">✏️</button> <button class="btn btn-sm btn-danger-ghost btn-icon" data-act="delRelief" data-id="${r.id}" title="${L('Padam', 'Delete')}">🗑️</button></td></tr>`).join('')}
+      </tbody></table></div>
+      <p class="hint" style="padding:4px 8px">${L('Jumlah', 'Total')}: <b>${total.n} ${L('relief', 'reliefs')}</b> • <b>${fmtDur(total.m)}</b>${ym ? ` (${monthLabel(ym)})` : ''}</p></div>`
+    : empty('🔄', L('Tiada relief direkod', 'No reliefs recorded'), ym ? L(`Tiada relief untuk ${monthLabel(ym)}.`, `No reliefs in ${monthLabel(ym)}.`) : L('Tambah rekod relief pertama.', 'Add your first relief record.'), add));
+};
+function reliefFormModal() {
+  const d = UI.draft;
+  const quick = [[30, L('30 minit', '30 min')], [60, L('1 jam', '1 hr')], [90, L('1 jam 30 minit', '1 hr 30 min')]];
+  return {
+    title: d.id ? `✏️ ${L('Kemas Kini Relief', 'Edit Relief')}` : `🔄 ${L('Tambah Relief', 'Add Relief')}`,
+    body: `<div class="form-grid">
+      ${field(`📅 ${L('Tarikh', 'Date')} *`, inp('date', d.date, 'type="date"'))}
+      ${field(`🗓️ ${L('Hari', 'Day')}`, `<div class="input" id="relief-day" style="background:var(--p50);font-weight:700">${d.date ? DAYS[lg()][parseISO(d.date).getDay()] : '—'}</div>`)}
+      ${field(`🏫 ${L('Kelas', 'Class')} *`, inp('kelas', d.kelas, `list="relief-classes" placeholder="${L('cth: 3 Arif', 'e.g. 3 Arif')}"`) + `<datalist id="relief-classes">${S.classes.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>`)}
+      ${field(`📘 ${L('Subjek', 'Subject')}`, inp('subject', d.subject, `placeholder="${L('cth: Matematik', 'e.g. Maths')}"`))}
+      ${field(`🕑 ${L('Masa Mula', 'Start Time')} *`, inp('start', d.start, 'type="time"'))}
+      ${field(`🕔 ${L('Masa Tamat', 'End Time')} *`, inp('end', d.end, 'type="time"'))}
+      <div class="field full"><span>⏱️ ${L('Berapa Masa', 'Duration')}</span>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><div class="input" id="relief-dur" style="background:var(--amber-bg);border-color:var(--amber-line);color:var(--amber);font-weight:800;width:auto;min-width:150px">${fmtDur(reliefMins(d))}</div>
+        <span class="muted" style="font-size:12.5px">${L('Pantas', 'Quick')}:</span>${quick.map(([m, t]) => `<button class="chip" data-act="reliefDur" data-m="${m}">${t}</button>`).join('')}</div></div>
+      ${field(`👤 ${L('Ganti Guru', 'Covering For')}`, inp('replacing', d.replacing, `placeholder="${L('cth: Cikgu Rosmah (Kursus)', 'e.g. Mr. Lee (Sick leave)')}"`), 'full')}
+      ${field(`🗒️ ${L('Catatan', 'Notes')}`, `<textarea class="input" id="f-notes" data-bind="notes" rows="3" placeholder="${L('cth: Murid buat latihan m/s 30', 'e.g. Students did exercise p.30')}">${esc(d.notes)}</textarea>`, 'full')}
+    </div>`,
+    footer: `<button class="btn btn-ghost" data-act="closeModal">${L('Batal', 'Cancel')}</button><button class="btn btn-primary" data-act="saveRelief">💾 ${L('Simpan', 'Save')}</button>`,
+  };
+}
+function updateReliefLive() {
+  const d = UI.draft, day = $('#relief-day'), dur = $('#relief-dur');
+  if (day) day.textContent = d.date ? DAYS[lg()][parseISO(d.date).getDay()] : '—';
+  if (dur) dur.textContent = d.end && d.start && d.end <= d.start ? L('⚠️ Masa tamat sebelum mula', '⚠️ End before start') : fmtDur(reliefMins(d));
 }
 
 /* ---------- Murid ---------- */
@@ -1161,8 +1244,30 @@ const REPORTS = {
       file: `keputusan-${safeName(e.title)}.csv`,
     };
   },
+  relief() {
+    const years = [...new Set([String(new Date().getFullYear()), ...S.reliefs.map(r => r.date.slice(0, 4))])].sort().reverse();
+    const ym = UI.rRelMonth;
+    const list = S.reliefs.filter(r => r.date.startsWith(ym || UI.rYear)).sort(sortRelief);
+    const mins = list.reduce((t, r) => t + reliefMins(r), 0);
+    return {
+      filters: `${field(L('Tahun', 'Year'), `<select class="input" data-ui="rYear">${years.map(y => `<option ${y === UI.rYear ? 'selected' : ''}>${y}</option>`).join('')}</select>`)}
+        ${field(L('Bulan (kosong = setahun)', 'Month (blank = whole year)'), `<input type="month" class="input" data-ui="rRelMonth" value="${ym}">`)}
+        ${ym ? `<button class="btn btn-ghost btn-sm" style="margin-bottom:4px" data-act="setUI" data-k="rRelMonth" data-v="">✕ ${L('Setahun', 'Whole year')}</button>` : ''}`,
+      tag: ym ? monthLabel(ym) : `${L('Tahun', 'Year')} ${UI.rYear}`,
+      title: `${L('Rekod Kelas Relief', 'Relief Class Record')} — Cikgu ${esc(S.settings.teacherName)}`,
+      html: `<div class="rs-summary"><div><b>${list.length}</b><small>${L('Jumlah Relief', 'Total Reliefs')}</small></div><div><b>${fmtDur(mins)}</b><small>${L('Jumlah Masa', 'Total Time')}</small></div><div><b>${new Set(list.map(r => r.kelas.toLowerCase())).size}</b><small>${L('Bilangan Kelas', 'Classes')}</small></div><div><b>${new Set(list.map(r => r.date)).size}</b><small>${L('Bilangan Hari', 'Days')}</small></div></div>
+        ${list.length ? `<table class="table"><thead><tr><th>#</th><th>${L('Tarikh', 'Date')}</th><th>${L('Hari', 'Day')}</th><th>${L('Kelas', 'Class')}</th><th>${L('Masa', 'Time')}</th><th>${L('Tempoh', 'Duration')}</th><th>${L('Ganti Guru', 'Covering For')}</th></tr></thead>
+        <tbody>${list.map((r, i) => `<tr><td>${i + 1}</td><td style="white-space:nowrap">${fmtDate(r.date)}</td><td>${DAYS[lg()][parseISO(r.date).getDay()]}</td><td><b>${esc(r.kelas)}</b>${r.subject ? `<br><small class="muted">${esc(r.subject)}</small>` : ''}</td><td style="white-space:nowrap">${fmtTime(r.start)} – ${fmtTime(r.end)}</td><td>${fmtDur(reliefMins(r))}</td><td>${esc(r.replacing || '—')}</td></tr>`).join('')}
+        <tr><td colspan="5" style="text-align:right"><b>${L('JUMLAH', 'TOTAL')}</b></td><td colspan="2"><b>${fmtDur(mins)}</b></td></tr></tbody></table>`
+        : `<div class="empty-sm">${L('Tiada rekod relief untuk tempoh ini.', 'No relief records for this period.')}</div>`}`,
+      csv: [[L('Bil', 'No'), L('Tarikh', 'Date'), L('Hari', 'Day'), L('Kelas', 'Class'), L('Subjek', 'Subject'), L('Masa Mula', 'Start'), L('Masa Tamat', 'End'), L('Tempoh (minit)', 'Duration (min)'), L('Ganti Guru', 'Covering For'), L('Catatan', 'Notes')],
+        ...list.map((r, i) => [i + 1, r.date, DAYS[lg()][parseISO(r.date).getDay()], r.kelas, r.subject, r.start, r.end, reliefMins(r), r.replacing, r.notes]),
+        ['', '', '', '', '', '', L('JUMLAH', 'TOTAL'), mins, '', '']],
+      file: `rekod-relief-${ym || UI.rYear}.csv`,
+    };
+  },
   meetings() {
-    const years = [...new Set([String(new Date().getFullYear()), ...S.meetings.map(m => m.date.slice(0, 4))])].sort().reverse();
+    const years =[...new Set([String(new Date().getFullYear()), ...S.meetings.map(m => m.date.slice(0, 4))])].sort().reverse();
     const list = S.meetings.filter(m => m.date.startsWith(UI.rYear) && (UI.rCat === 'all' || m.category === UI.rCat)).sort(sortMeet);
     const hours = list.reduce((t, m) => t + (Number(m.hours) || 0), 0);
     return {
@@ -1185,10 +1290,11 @@ VIEWS.reports = () => {
   const st = S.settings;
   const head = pageHead(L(`Laporan Rasmi ${st.schoolShort}`, `${st.schoolShort} Official Reports`), L('Jana laporan, eksport CSV dan cetak / simpan sebagai PDF untuk kegunaan sendiri, ibu bapa atau sekolah.', 'Generate reports, export CSV and print / save as PDF.'),
     `<button class="btn btn-ghost" data-act="exportCSV">⬇️ ${L('Eksport CSV', 'Export CSV')}</button><button class="btn btn-primary" data-act="printReport">🖨️ ${L('Cetak / Simpan PDF', 'Print / Save PDF')}</button>`);
-  if (!S.classes.length && UI.rTab !== 'meetings') UI.rTab = 'meetings';
-  const tabs = [['attendance', L('Penyata Kehadiran', 'Attendance')], ['homework', L('Audit Kerja Rumah Tertunggak', 'Outstanding Homework')], ['card', L('Kad Pelaporan Murid', 'Report Card')], ['exam', L('Keputusan Peperiksaan', 'Exam Results')], ['meetings', L('Rekod Mesyuarat & Kursus', 'Meetings & Courses')]];
+  const noClassTabs = ['relief', 'meetings'];
+  if (!S.classes.length && !noClassTabs.includes(UI.rTab)) UI.rTab = 'meetings';
+  const tabs = [['attendance', L('Penyata Kehadiran', 'Attendance')], ['homework', L('Audit Kerja Rumah Tertunggak', 'Outstanding Homework')], ['card', L('Kad Pelaporan Murid', 'Report Card')], ['exam', L('Keputusan Peperiksaan', 'Exam Results')], ['relief', L('Rekod Relief', 'Relief Record')], ['meetings', L('Rekod Mesyuarat & Kursus', 'Meetings & Courses')]];
   const r = REPORTS[UI.rTab]();
-  return head + `<div class="card report-bar"><div class="tabs">${tabs.map(([k, t]) => `<button class="${UI.rTab === k ? 'on' : ''}" data-act="setUI" data-k="rTab" data-v="${k}" ${!S.classes.length && k !== 'meetings' ? 'disabled' : ''}>${t}</button>`).join('')}</div><div class="report-filters">${r.filters}</div></div>
+  return head + `<div class="card report-bar"><div class="tabs">${tabs.map(([k, t]) => `<button class="${UI.rTab === k ? 'on' : ''}" data-act="setUI" data-k="rTab" data-v="${k}" ${!S.classes.length && !noClassTabs.includes(k) ? 'disabled' : ''}>${t}</button>`).join('')}</div><div class="report-filters">${r.filters}</div></div>
   <div class="report-sheet card">
     <div class="rs-head"><img src="${LOGO}" alt=""><div class="rs-school"><h2>${esc(st.schoolName.toUpperCase())}</h2><p class="rs-motto">${esc(st.motto.toUpperCase().split(' ').join(' • '))}</p><p>${esc(st.address)}${st.schoolCode ? ` • ${L('Kod Sekolah', 'School Code')}: ${esc(st.schoolCode)}` : ''}</p></div>
       <div class="rs-right"><span class="rs-tag">${esc(r.tag)}</span><p>${L('Tarikh', 'Date')}: <b>${fmtDate(todayISO())}</b></p><p>${L('Guru', 'Teacher')}: <b>${esc(st.teacherName)}</b></p></div></div>
@@ -1322,8 +1428,29 @@ A.delSlot = async el => {
   await persistNow(); closeModal(); render();
 };
 
+/* Relief */
+A.addRelief = () => { UI.draft = { date: todayISO(), kelas: '', start: '08:00', end: '08:30', subject: '', replacing: '', notes: '' }; openModal(reliefFormModal, 'md'); };
+A.editRelief = el => { UI.draft = clone(S.reliefs.find(r => r.id === el.dataset.id)); openModal(reliefFormModal, 'md'); };
+A.reliefDur = el => { const d = UI.draft; d.end = minToTime(toMin(d.start || '08:00') + Number(el.dataset.m)); drawModal(); };
+A.saveRelief = async () => {
+  const d = UI.draft;
+  if (!d.date || !d.kelas.trim() || !d.start || !d.end) return toast(L('Sila isi Tarikh, Kelas dan Masa.', 'Please fill in Date, Class and Time.'), 'err');
+  if (d.end <= d.start) return toast(L('Masa tamat mesti selepas masa mula.', 'End time must be after start time.'), 'err');
+  const old = d.id && S.reliefs.find(r => r.id === d.id);
+  const rec = { id: d.id || uid(), date: d.date, kelas: d.kelas.trim(), start: d.start, end: d.end, subject: d.subject.trim(), replacing: d.replacing.trim(), notes: d.notes };
+  if (old) Object.assign(old, rec); else S.reliefs.push(rec);
+  if (UI.relMonth && !rec.date.startsWith(UI.relMonth)) UI.relMonth = rec.date.slice(0, 7);
+  await persistNow(); closeModal(); render(); toast(`✅ ${L('Rekod relief disimpan', 'Relief saved')} — ${fmtDur(reliefMins(rec))}`);
+};
+A.delRelief = async el => {
+  const r = S.reliefs.find(x => x.id === el.dataset.id);
+  if (!await ask(L(`Padam relief ${esc(r.kelas)} pada ${fmtDate(r.date)}?`, `Delete relief for ${esc(r.kelas)} on ${fmtDate(r.date)}?`), { danger: true, ok: L('Padam', 'Delete') })) return;
+  S.reliefs = S.reliefs.filter(x => x.id !== r.id);
+  await persistNow(); render(); toast(L('Relief dipadam', 'Relief deleted'), 'info');
+};
+
 /* Murid */
-A.addStudent = () => { UI.draft = { name: '', classId: UI.stuClass !== 'all' ? UI.stuClass : S.classes[0].id, studentId: nextStudentId(), gender: '', parent: '', phone: '', notes: '', avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)] }; openModal(studentFormModal, 'md'); };
+A.addStudent =() => { UI.draft = { name: '', classId: UI.stuClass !== 'all' ? UI.stuClass : S.classes[0].id, studentId: nextStudentId(), gender: '', parent: '', phone: '', notes: '', avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)] }; openModal(studentFormModal, 'md'); };
 A.editStudent = el => { UI.draft = clone(stu(el.dataset.id)); openModal(studentFormModal, 'md'); };
 A.viewStudent = el => { UI.profileId = el.dataset.id; openModal(studentProfileModal, 'md'); };
 A.saveStudent = async () => {
@@ -1563,7 +1690,11 @@ document.addEventListener('click', e => {
 });
 document.addEventListener('input', e => {
   const el = e.target;
-  if (el.dataset.bind && UI.draft) { UI.draft[el.dataset.bind] = el.type === 'checkbox' ? el.checked : el.value; return; }
+  if (el.dataset.bind && UI.draft) {
+    UI.draft[el.dataset.bind] = el.type === 'checkbox' ? el.checked : el.value;
+    if (UI.modal?.fn === reliefFormModal) updateReliefLive();
+    return;
+  }
   if (el.dataset.inp && INP[el.dataset.inp]) { INP[el.dataset.inp](el); return; }
   if (el.dataset.ui && (el.type === 'text' || el.type === 'search' || !el.type)) { UI[el.dataset.ui] = el.value; render(); }
 });
